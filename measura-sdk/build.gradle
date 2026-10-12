@@ -8,7 +8,7 @@ plugins {
 // The published version, in ONE place. It was previously two literals in this
 // file, defaultConfig.versionName and the publication version, which is how an
 // AAR ends up reporting one version at runtime while resolving as another.
-ext.measuraSdkVersion = '0.1.1'
+ext.measuraSdkVersion = '0.1.2'
 
 android {
     namespace 'dev.measura.sdk'

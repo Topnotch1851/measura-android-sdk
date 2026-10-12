@@ -976,7 +976,7 @@ internal class MeasuraClient(
             else -> null
         }
 
-        const val SDK_VERSION = "0.1.1"
+        const val SDK_VERSION = "0.1.2"
         private const val PREF_INSTALL_TRACKED = "install_tracked"
         private const val PREF_TRACKING_ENABLED = "tracking_enabled"
         private const val PREF_PUSH_TOKEN = "push_token"

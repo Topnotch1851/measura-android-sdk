@@ -4,7 +4,7 @@ Install attribution, deep links, event and revenue tracking for Android, with an
 
 ```gradle
 dependencies {
-    implementation 'dev.measura:measura-sdk:0.1.1'
+    implementation 'dev.measura:measura-sdk:0.1.2'
 }
 ```
 
