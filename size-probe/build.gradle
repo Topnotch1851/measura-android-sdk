@@ -1,0 +1,98 @@
+// =============================================================================
+// SDK APK-IMPACT PROBE
+//
+// Exists to measure SDK_APK_IMPACT_BYTES / SDK_APK_IMPACT_BUDGET_BYTES
+// (frontend/lib/sdk-size.ts) in CI instead of by hand, which is what let the
+// site's "about 240 KB" figure go unenforced until now.
+//
+// Built twice by the android-sdk CI job with -PincludeSdk={false,true}. Which
+// variant gets built is decided entirely by which MainActivity source set is
+// compiled (src/withoutSdk vs src/withSdk) - see the sourceSets block below -
+// not by a runtime flag, because a runtime `if` still requires the SDK class
+// to be resolvable at compile time even on the branch that never executes,
+// and because a call gated only at runtime is still statically reachable from
+// the manifest's launcher activity, so R8 would keep it either way and the
+// "without SDK" build would not actually be without it.
+//
+// The withSdk variant calls init/trackEvent/identify/setPushToken.
+// measura-sdk's consumer-rules.pro already force-keeps the entire public
+// surface of Measura regardless of caller usage, so these calls are not what
+// stops R8 from tree-shaking the dependency away - the keep rule does that.
+// They exist so this measurement does not silently start understating the
+// real cost if that keep rule is ever narrowed to specific methods.
+// =============================================================================
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def includeSdk = (project.findProperty('includeSdk') ?: 'false').toString() == 'true'
+
+android {
+    namespace 'dev.measura.sizeprobe'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'dev.measura.sizeprobe'
+        minSdk 21          // must match measura-sdk's minSdk or the withSdk
+        targetSdk 34        // variant fails manifest merging
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Assignment (=), not append (+=): this REPLACES the default
+    // src/main/kotlin, so exactly one MainActivity is ever on the compile
+    // path. The two variants are otherwise identical - same manifest, same
+    // build type, same minSdk/targetSdk - so the only difference between the
+    // two release APKs is the SDK itself.
+    sourceSets {
+        main {
+            kotlin.srcDirs = [includeSdk ? 'src/withSdk/kotlin' : 'src/withoutSdk/kotlin']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+// -PsdkVersion=0.1.1 builds against that published artifact from Maven Central
+// instead of the local module, to check what a real app actually receives.
+def publishedSdk = project.findProperty('sdkVersion')
+
+dependencies {
+    if (includeSdk) {
+        if (publishedSdk) {
+            implementation "dev.measura:measura-sdk:${publishedSdk}"
+        } else {
+            implementation project(':measura-sdk')
+        }
+    }
+}
+
+// Fails the build unless the merged manifest declares AD_ID. The SDK reads the
+// advertising ID by default, and on Android 13+ that needs this permission.
+tasks.register('verifyMergedManifestAdId') {
+    dependsOn 'processReleaseMainManifest'
+    doLast {
+        def merged = fileTree("$buildDir/intermediates/merged_manifest/release")
+            .matching { include '**/AndroidManifest.xml' }.singleFile
+        if (!merged.text.contains('com.google.android.gms.permission.AD_ID')) {
+            throw new GradleException("Merged manifest is missing AD_ID: ${merged}")
+        }
+        println "AD_ID_IN_MERGED_MANIFEST_OK ${merged}"
+    }
+}

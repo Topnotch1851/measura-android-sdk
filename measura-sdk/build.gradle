@@ -1,0 +1,239 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+    id 'maven-publish'
+    id 'signing'
+}
+
+// The published version, in ONE place. It was previously two literals in this
+// file, defaultConfig.versionName and the publication version, which is how an
+// AAR ends up reporting one version at runtime while resolving as another.
+ext.measuraSdkVersion = '0.1.1'
+
+android {
+    namespace 'dev.measura.sdk'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 21                          // Android 5.0+ - covers ~99% of African market
+        targetSdk 34
+        versionCode 1
+        versionName measuraSdkVersion
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // Live end-to-end credentials, injected from CI secrets. Empty in a
+        // normal build: the live test then skips itself instead of failing,
+        // so a contributor without the secret still gets a green build.
+        // Diagnostics are OFF in a published build. R8 constant-folds the
+        // guards in MeasuraDebug, so the class and every emit call site are
+        // removed from the release AAR entirely rather than shipped inert.
+        // Turn on with -PmeasuraDiagnostics=true for the harness.
+        buildConfigField "boolean", "MEASURA_DIAGNOSTICS", (project.findProperty('measuraDiagnostics') ?: 'false').toString()
+        buildConfigField "String", "E2E_API_KEY", "\"" + (System.getenv("MEASURA_E2E_API_KEY") ?: "") + "\""
+        // A second staging tenant that keeps the server's default config
+        // (Wi-Fi only on), for the device test that proves the backlog is held
+        // on mobile data. The main E2E tenant has Wi-Fi only off server side so
+        // the drain itself runs on mobile-only devices such as the API 21 image.
+        buildConfigField "String", "E2E_WIFI_API_KEY", "\"" + (System.getenv("MEASURA_E2E_WIFI_API_KEY") ?: "") + "\""
+        buildConfigField "String", "E2E_INGEST_ENDPOINT", "\"" + (System.getenv("MEASURA_E2E_ENDPOINT") ?: "") + "\""
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    // Instrumentation tests run against the minified release variant,
+    // because debug is not what ships and would not exercise R8 at all.
+    testBuildType "release"
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // Central requires a sources jar and a javadoc jar alongside the AAR. AGP
+    // builds both from the release variant, so neither needs a hand-rolled Jar
+    // task, and singleVariant makes 'release' the only thing publishable: debug
+    // is unminified and must never reach the coordinate.
+    publishing {
+        singleVariant('release') {
+            withSourcesJar()
+            withJavadocJar()
+        }
+    }
+
+    buildTypes {
+        release {
+            // The SDK is shrunk before publication rather than relying on the
+            // host app to do it. Consumers minify their own app, but that does
+            // not shrink what we ship them: the AAR still carries every unused
+            // generated member and full internal names, and download size is
+            // the thing we advertise.
+            //
+            // Uses proguard-android.txt, NOT the -optimize variant. Both shrink
+            // and obfuscate; -optimize additionally runs aggressive inlining and
+            // class-merging passes that can change behaviour in ways only visible
+            // at runtime. For an SDK that runs inside other people's apps, a few
+            // KB is a cheap price for removing the layer hardest to reason about.
+            //
+            // Safe here specifically because the SDK uses no reflection. See
+            // proguard-rules.pro, which keeps the entire public API and
+            // explains what would make this unsafe later.
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if ((project.findProperty('measuraDiagnostics') ?: 'false').toString() == 'true') {
+                proguardFile 'proguard-diagnostics.pro'
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = false
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    // Keep the AAR small. The real budget is SDK_SIZE_BUDGET_BYTES in
+    // frontend/lib/sdk-size.ts, currently 102,400 gzipped, and CI reads it from
+    // there. The 150 KB this comment used to claim was never the enforced
+    // figure.
+    packaging {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+    }
+}
+
+dependencies {
+    // Minimal external dependencies for minimal SDK size.
+    // Kotlin stdlib and coroutines are standard in any Android project.
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
+    // Google Play Install Referrer (~20 KB) - THE deterministic attribution
+    // signal for link-based channels (WhatsApp/QR/SMS/USSD → Play Store).
+    // Reads the measura_click_id that deep-link encodes into the Play URL's
+    // &referrer= parameter (audit S-2 / BUILD_PLAN C3).
+    implementation "com.android.installreferrer:installreferrer:2.2"
+
+    // Drains the offline queue after process death and under Doze. Deliberately
+    // work-runtime and not work-runtime-ktx: the ktx artifact exists for
+    // CoroutineWorker and coroutine extensions, and this SDK already ships
+    // coroutines, so it would add surface without adding capability.
+    //
+    // This does NOT land in the published AAR. An AAR carries only this
+    // library's own classes; androidx.work resolves in the integrator's build.
+    // The size gate measures the AAR, so the advertised figure is unaffected,
+    // but the integrator's APK does grow, which is disclosed in the docs.
+    implementation "androidx.work:work-runtime:2.9.1"
+
+    // No OkHttp, no Retrofit - uses HttpURLConnection to stay inside the gzipped
+    // AAR budget in frontend/lib/sdk-size.ts. Worth knowing where the weight
+    // actually is: the AAR is ~75 KB, but WorkManager above pulls in Room and
+    // SQLite, and integrating the SDK grows a minified APK by ~312 KB. Of 645
+    // classes R8 retains in a probe app, 31 are ours.
+
+    testImplementation 'junit:junit:4.13.2'
+    // org.json ships as stubs in the JVM unit-test runtime and every method
+    // throws unless the real implementation is on the test classpath.
+    testImplementation 'org.json:json:20231013'
+    testImplementation 'org.mockito:mockito-core:5.3.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.work:work-testing:2.9.1'
+}
+
+// =============================================================================
+// MAVEN CENTRAL PUBLICATION
+//
+// Publishes dev.measura:measura-sdk. Central grants a groupId by reverse DNS
+// against a domain you control, which is the whole reason the SDK namespace
+// moved off io.measura: measura.dev grants dev.measura and nothing else.
+//
+// Central REJECTS a deployment missing any of these, and it rejects it after
+// upload rather than before, which is the slowest possible way to find out:
+//   - a POM carrying name, description, url, a license, a developer and scm
+//   - a sources jar
+//   - a javadoc jar
+//   - a detached PGP signature over every file above, the POM included
+//
+// All of it is produced here rather than by a third-party publishing plugin,
+// for the same reason ci.yml declares no `uses:` steps: one fewer download
+// that can be unavailable on the day of a release.
+//
+// This writes a local repository directory, NOT a network upload. Gradle lays
+// out build/central-staging/dev/measura/... with checksums, and
+// .github/workflows/publish-sdk.yml zips that into the bundle the Central
+// Portal API accepts. Split that way, the exact bytes of a release can be
+// built and inspected locally without holding credentials for anything.
+// =============================================================================
+
+// Signing material arrives from CI as an ASCII-armoured private key in an
+// environment variable, never a keyring on disk. When absent, signing is
+// skipped so that an ordinary assembleRelease still works for a contributor
+// who has no key; the publish workflow checks for the key itself and refuses
+// to start without one.
+def signingKeyArmored = System.getenv('MEASURA_SIGNING_KEY')
+def signingPassphrase = System.getenv('MEASURA_SIGNING_PASSWORD')
+
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = 'dev.measura'
+                artifactId = 'measura-sdk'
+                version = measuraSdkVersion
+
+                pom {
+                    name = 'Measura Android SDK'
+                    description = 'Android mobile measurement SDK: install attribution, deep links, event and revenue tracking, and an offline queue. AAR under 100 KB gzipped; uses AndroidX WorkManager for background delivery.'
+                    url = 'https://measura.dev'
+                    licenses {
+                        license {
+                            name = 'MIT License'
+                            url = 'https://opensource.org/licenses/MIT'
+                            distribution = 'repo'
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = 'measura'
+                            name = 'Safli Technologies Ltd'
+                            url = 'https://measura.dev'
+                        }
+                    }
+                    scm {
+                        url = 'https://github.com/Topnotch1851/measura-android-sdk'
+                        connection = 'scm:git:https://github.com/Topnotch1851/measura-android-sdk.git'
+                        developerConnection = 'scm:git:ssh://git@github.com/Topnotch1851/measura-android-sdk.git'
+                    }
+                }
+            }
+        }
+
+        repositories {
+            maven {
+                name = 'centralStaging'
+                url = layout.buildDirectory.dir('central-staging').get().asFile.toURI()
+            }
+        }
+    }
+
+    signing {
+        // Truthy only when a key was supplied, so `required` and the sign call
+        // agree; asking Gradle to sign with no key configured fails the build
+        // at execution time with a message that names neither.
+        required { signingKeyArmored as boolean }
+        if (signingKeyArmored) {
+            useInMemoryPgpKeys(signingKeyArmored, signingPassphrase ?: '')
+            sign publishing.publications.release
+        }
+    }
+}

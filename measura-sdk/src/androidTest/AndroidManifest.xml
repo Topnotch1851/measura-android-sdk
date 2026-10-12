@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Test APK only: SdkBehaviourTest talks to FakeMeasuraServer over plain
+     HTTP on 127.0.0.1, which API 28+ refuses without this. Never merged into
+     the published AAR. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Measura Android SDK manifest.
+
+  Both permissions are declared here so host apps inherit them through manifest
+  merging and integrators do not have to know about them. Neither is a runtime
+  permission, so neither shows a consent dialog.
+
+  INTERNET is required, not optional. The SDK's only purpose is to deliver
+  events to the ingest endpoint; without this permission every network call
+  fails with EPERM on getaddrinfo, the SDK retries, the events queue on disk,
+  and nothing ever arrives. No exception reaches the host app and no log
+  explains it: installs simply stop appearing in the dashboard.
+
+  An earlier version of this file omitted INTERNET on the reasoning that an app
+  sending events would already declare it, and that adding it silently would be
+  presumptuous. That was wrong in both halves. An app integrating an analytics
+  SDK has by definition opted into network access, and the failure mode for
+  guessing wrong is silent data loss rather than a build error. The
+  instrumentation test on a clean emulator is what exposed it.
+
+  ACCESS_NETWORK_STATE backs the connectivity check that honours wifiOnlyMode
+  and avoids burning a user's mobile data.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
+</manifest>

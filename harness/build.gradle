@@ -1,0 +1,115 @@
+// =============================================================================
+// MEASURA SDK HARNESS
+//
+// A laboratory for the SDK, not a product. It exists so the ingestion path can
+// be exercised end to end on a device, which the library module cannot do on
+// its own: you cannot install a library on an emulator.
+//
+// It consumes the SDK the way an integrator would, through the published
+// public API and `implementation project(':measura-sdk')`. That project
+// dependency is the whole reason this does not need Maven Central, a verified
+// namespace or the measura.dev domain. the tracking file recorded the harness as
+// blocked by B1; B1 blocks PUBLICATION, and a local module needs none of it.
+//
+// No AndroidX, no Compose, no appcompat. The views are built in code against
+// the framework, matching the SDK's own dependency stance and keeping the
+// build fast enough to iterate on.
+// =============================================================================
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// -----------------------------------------------------------------------------
+// Where this harness sends events.
+//
+// There is deliberately NO fallback. MeasuraConfig compiles in the production
+// ingest host as its default, so an unset value here would not be neutral: the
+// harness would resolve its key against production and post test traffic into
+// the real database. An empty value instead makes the app refuse to
+// initialise and say so on screen.
+//
+// Set it in sdk/android/local.properties (gitignored) or on the command line:
+//   -PmeasuraEndpoint=https://<ref>.supabase.co/functions/v1/ingest
+//   -PmeasuraApiKey=msr_...
+// -----------------------------------------------------------------------------
+def harnessEndpoint = project.findProperty('measuraEndpoint')
+        ?: System.getenv('MEASURA_HARNESS_ENDPOINT') ?: ''
+def harnessApiKey = project.findProperty('measuraApiKey')
+        ?: System.getenv('MEASURA_HARNESS_API_KEY') ?: ''
+def harnessSeedReferrer = project.findProperty('measuraSeedReferrer')
+        ?: System.getenv('MEASURA_HARNESS_SEED_REFERRER') ?: ''
+def harnessAutoInit = (project.findProperty('measuraAutoInit') ?: 'false').toString()
+def harnessSuppressFlush = (project.findProperty('measuraSuppressFlush') ?: 'false').toString()
+def harnessEnvLabel = project.findProperty('measuraEnvLabel')
+        ?: System.getenv('MEASURA_HARNESS_ENV') ?: 'UNCONFIGURED'
+
+android {
+    namespace 'dev.measura.harness'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'dev.measura.harness'
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+
+        buildConfigField 'String', 'MEASURA_ENDPOINT', "\"${harnessEndpoint}\""
+        buildConfigField 'String', 'MEASURA_API_KEY', "\"${harnessApiKey}\""
+        buildConfigField 'String', 'MEASURA_ENV_LABEL', "\"${harnessEnvLabel}\""
+        buildConfigField 'String', 'MEASURA_SEED_REFERRER', "\"${harnessSeedReferrer}\""
+        buildConfigField 'boolean', 'MEASURA_AUTO_INIT', harnessAutoInit
+        buildConfigField 'boolean', 'MEASURA_SUPPRESS_FLUSH', harnessSuppressFlush
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        // Never minified. This is a diagnostic tool; R8 renaming its own
+        // classes would only make its output harder to read. The SDK's own
+        // minification is proven separately by the library module's release
+        // build and the CI size gate.
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation project(':measura-sdk')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
+    // The SDK declares androidx.work as an `implementation` dependency, which
+    // does not leak onto this module's compile classpath but is required at
+    // runtime. Stated explicitly so the harness fails at build time rather
+    // than with a NoClassDefFoundError the first time the SDK schedules its
+    // background flush.
+    implementation "androidx.work:work-runtime:2.9.1"
+
+    // Play Integrity lives HERE and deliberately not in measura-sdk. It is over
+    // 100 KB against a 65,536 byte gzipped AAR budget, and an integrator who
+    // wants attestation already has it: they cannot produce a token without it.
+    // Putting it in the SDK would charge every integrator for a library only
+    // some of them use.
+    //
+    // The harness carrying it is the point: it is the only place that proves an
+    // integrator can actually satisfy the contract in Measura.setIntegrityToken,
+    // rather than the contract existing only as documentation.
+    implementation "com.google.android.play:integrity:1.4.0"
+}
